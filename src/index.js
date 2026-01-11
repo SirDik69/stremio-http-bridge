@@ -2,36 +2,45 @@ import { Router } from 'itty-router';
 
 const router = Router();
 
-const corsHeaders = {
+// ==========================================
+// CONFIGURACIÓN DE PROVEEDORES
+// ==========================================
+// La estrategia es probar uno por uno hasta obtener resultados.
+const PROVIDERS = [
+  {
+    name: "KnightCrawler",
+    url: "https://knightcrawler.elfhosted.com/stream" // ElfHosted suele ser permisivo
+  },
+  {
+    name: "TPB+",
+    url: "https://tpb.strem.fun/stream" // Simple y efectivo
+  },
+  {
+    name: "Torrentio",
+    url: "https://torrentio.strem.fun/stream" // El más estricto (Backup)
+  }
+];
+
+// Headers estándar para respuesta
+const responseHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
   "Access-Control-Allow-Headers": "*",
   "Content-Type": "application/json; charset=utf-8"
 };
 
-const json = (data) => new Response(JSON.stringify(data), { headers: corsHeaders });
+const json = (data) => new Response(JSON.stringify(data), { headers: responseHeaders });
 
 // ==========================================
-// CONFIGURACIÓN DE RUTAS Y PROXIES
+// RUTAS
 // ==========================================
-
-// 1. URL de Torrentio Original (Suele bloquear Workers)
-const PROVIDERS = "providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,magnetdl,torrentgalaxy|quality=720p,1080p,4k";
-const TORRENTIO_URL = `https://torrentio.strem.fun/${PROVIDERS}`;
-
-// 2. URL de KnightCrawler (Alternativa a Torrentio que NO bloquea, usamos como backup o principal)
-const KNIGHTCRAWLER_URL = "https://knightcrawler.elfhosted.com/yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,magnetdl,torrentgalaxy,scenerules,mediafusion";
-
-// 3. EL PROXY MÁGICO (Esto soluciona el 403)
-// Usamos corsproxy.io para que Torrentio no sepa que somos un Worker
-const PROXY_GATEWAY = "https://corsproxy.io/?";
 
 router.get('/manifest.json', () => {
   return json({
-    id: "com.nuvio.tunnel.v3",
-    version: "1.3.0",
-    name: "HTTP Bridge (Tunnel)",
-    description: "Stremio Server Bridge via Proxy Tunneling",
+    id: "com.nuvio.universal.bridge",
+    version: "2.0.0",
+    name: "Universal HTTP Bridge",
+    description: "Multi-provider Torrent to HTTP bridge (KnightCrawler/TPB/Torrentio)",
     logo: "https://dl.strem.io/addon-logo.png",
     resources: [
       { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
@@ -44,7 +53,11 @@ router.get('/manifest.json', () => {
 
 router.get('/meta/:type/:id.json', ({ params }) => {
   return json({
-    meta: { id: params.id.replace(".json", ""), type: params.type, name: "Meta" }
+    meta: {
+      id: params.id.replace(".json", ""),
+      type: params.type,
+      name: "Metadata"
+    }
   });
 });
 
@@ -55,72 +68,91 @@ router.get('/stream/:type/:id.json', async (request, env) => {
   if (!env.STREMIO_SERVER_URL) {
     return json({ streams: [{ name: "⚠️ ERROR", title: "Configura STREMIO_SERVER_URL", url: "#" }] });
   }
-
   const serverUrl = env.STREMIO_SERVER_URL.replace(/\/$/, "");
 
-  // Función interna para procesar la lista de streams
-  const processStreams = (streams, sourceName) => {
-    return streams.map(stream => {
-      if (!stream.infoHash) return null;
-      const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
-      const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
+  // ==========================================
+  // LÓGICA MULTI-PROVEEDOR
+  // ==========================================
+  
+  let validStreams = [];
+  let errorLog = [];
+
+  // Iteramos sobre los proveedores hasta encontrar streams
+  for (const provider of PROVIDERS) {
+    try {
+      console.log(`Intentando con ${provider.name}...`);
       
-      const titleLines = (stream.title || "").split("\n");
-      const mainTitle = titleLines[0];
-
-      return {
-        name: `⚡ HTTP [${sourceName}]`,
-        title: `${mainTitle}\n${titleLines[1] || ''}`, 
-        url: directUrl,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: stream.behaviorHints?.bingeGroup,
-          filename: stream.behaviorHints?.filename
+      const targetUrl = `${provider.url}/${type}/${id}.json`;
+      
+      const response = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", // UA genérico
+        },
+        cf: {
+          cacheTtl: 60, // Pedimos a Cloudflare que use caché si es posible
+          cacheEverything: true
         }
-      };
-    }).filter(Boolean);
-  };
+      });
 
-  try {
-    // ESTRATEGIA 1: Usar KnightCrawler DIRECTO (Más rápido, no bloquea)
-    // Es lo más estable hoy en día para scripts.
-    console.log("Intentando Strategy 1: KnightCrawler Directo...");
-    const kcUrl = `${KNIGHTCRAWLER_URL}/stream/${type}/${id}.json`;
-    
-    let response = await fetch(kcUrl);
-    
-    if (response.ok) {
-      const data = await response.json();
-      if (data.streams && data.streams.length > 0) {
-        return json({ streams: processStreams(data.streams, "KC") });
+      if (!response.ok) {
+        errorLog.push(`${provider.name}: ${response.status}`);
+        continue; // Pasamos al siguiente proveedor
       }
-    }
 
-    // ESTRATEGIA 2: Si falla KC, usamos Torrentio CON PROXY
-    // Envolvemos la URL de Torrentio dentro del Proxy
-    console.log("Intentando Strategy 2: Torrentio via Proxy...");
-    const targetTorrentio = `${TORRENTIO_URL}/stream/${type}/${id}.json`;
-    
-    // AQUÍ ESTÁ EL TRUCO: Pasamos la URL encodeada al proxy
-    const proxyUrl = `${PROXY_GATEWAY}${encodeURIComponent(targetTorrentio)}`;
-    
-    response = await fetch(proxyUrl);
-
-    if (response.ok) {
       const data = await response.json();
+
       if (data.streams && data.streams.length > 0) {
-        return json({ streams: processStreams(data.streams, "TR") });
+        // ¡ÉXITO! Procesamos los streams de este proveedor
+        validStreams = data.streams.map(stream => {
+          if (!stream.infoHash) return null;
+
+          const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
+          const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
+          
+          // Limpieza de título
+          const parts = (stream.title || "").split("\n");
+          const cleanTitle = parts[0] || "Stream";
+          const details = parts[1] || `S:${stream.seeders || '?'} - ${provider.name}`;
+
+          return {
+            name: `⚡ ${provider.name}`, // Mostramos qué proveedor funcionó
+            title: `${cleanTitle}\n${details}`,
+            url: directUrl,
+            behaviorHints: {
+              notWebReady: false,
+              bingeGroup: stream.behaviorHints?.bingeGroup,
+              filename: stream.behaviorHints?.filename
+            }
+          };
+        }).filter(Boolean);
+
+        // Si obtuvimos streams válidos, rompemos el bucle y devolvemos
+        if (validStreams.length > 0) {
+          console.log(`Éxito con ${provider.name}: ${validStreams.length} streams`);
+          break; 
+        }
       }
+    } catch (e) {
+      console.error(`Error con ${provider.name}:`, e.message);
+      errorLog.push(`${provider.name}: ${e.message}`);
     }
-
-    return json({ streams: [{ name: "⚠️ VACÍO", title: "No se encontraron resultados en ninguna fuente", url: "#" }] });
-
-  } catch (error) {
-    return json({ streams: [{ name: "☠️ ERROR", title: error.message, url: "#" }] });
   }
+
+  // Si después de probar todos no hay nada
+  if (validStreams.length === 0) {
+    return json({ 
+      streams: [{ 
+        name: "⚠️ SIN RESULTADOS", 
+        title: `Fallaron todos los proveedores:\n${errorLog.join("\n")}`, 
+        url: "#" 
+      }] 
+    });
+  }
+
+  return json({ streams: validStreams });
 });
 
-router.options('*', () => new Response(null, { headers: corsHeaders }));
-router.all('*', () => new Response('Not Found', { status: 404, headers: corsHeaders }));
+router.options('*', () => new Response(null, { headers: responseHeaders }));
+router.all('*', () => new Response('Not Found', { status: 404, headers: responseHeaders }));
 
 export default { fetch: router.handle };
