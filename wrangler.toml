@@ -1,0 +1,11 @@
+name = "stremio-http-bridge"
+main = "src/index.js"
+compatibility_date = "2023-12-01"
+
+# Aquí definimos las variables. 
+# Recomiendo configurarlas en el Dashboard de Cloudflare o usando 'wrangler secret put',
+# pero para pruebas rápidas puedes descomentar la línea de abajo y poner tu URL.
+
+[vars]
+# STREMIO_SERVER_URL = "https://tu-proxy-privado.workers.dev" 
+# DEJA ESTO COMENTADO SI USAS SECRETOS (RECOMENDADO)
