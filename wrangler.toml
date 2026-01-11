@@ -1,4 +1,4 @@
-name = "stremio-http-bridge"
+name = "mi-debrid-casero"
 main = "src/index.js"
 compatibility_date = "2023-12-01"
 
