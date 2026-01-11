@@ -22,10 +22,20 @@ router.get('/manifest.json', () => {
     version: "1.0.3", // Subimos versión para forzar actualización
     name: "HTTP Bridge (Nuvio)",
     description: "Puente HTTPS para Stremio Server via Proxy",
-    resources: ["stream", "meta"],
-    types: ["movie", "series"],
-    catalogs: [],
-    idPrefixes: ["tt"]
+    resources: [
+    {
+      name: "stream",
+      types: ["movie"],
+      idPrefixes: ["tt"]
+    },
+    {
+      name: "meta",
+      types: ["movie"],
+      idPrefixes: ["tt"]
+    }
+  ],
+  types: ["movie"],
+  catalogs: []
   }), { headers: corsHeaders });
 });
 
