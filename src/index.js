@@ -2,108 +2,113 @@ import { Router } from 'itty-router';
 
 const router = Router();
 
-// CONFIGURACIÓN
-// 1. Usamos una configuración de Torrentio robusta (varios proveedores)
-const TORRENTIO_BASE = "https://torrentio.strem.fun";
+// URL de Torrentio configurada (Providers + Quality)
+const TORRENTIO_URL = "https://torrentio.strem.fun/providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,magnetdl,torrentgalaxy";
 
-// 2. El Proxy Mágico (Soluciona bloqueos de IP y CORS)
-const PROXY_URL = "https://corsproxy.io/?";
-
+// Headers CORS Universales (Blindado)
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, Origin, X-Requested-With",
+  "Content-Type": "application/json; charset=utf-8" // Importante charset
 };
 
-// --- RUTA 1: MANIFEST ---
+// Función helper para responder JSON rápido
+const json = (data) => new Response(JSON.stringify(data), { headers: corsHeaders });
+
+// ==========================================
+// 1. MANIFEST (Estricto con Objetos)
+// ==========================================
 router.get('/manifest.json', () => {
-  return new Response(JSON.stringify({
+  return json({
     id: "com.midomain.httpbridge",
-    version: "1.0.3", // Subimos versión para forzar actualización
+    version: "1.0.5",
     name: "HTTP Bridge (Nuvio)",
-    description: "Puente HTTPS para Stremio Server via Proxy",
+    description: "Puente HTTPS para Stremio Server - Fixed",
+    // Icono opcional para que se vea bien
+    logo: "https://dl.strem.io/addon-logo.png", 
+    
+    // Aquí el cambio clave: Resources como objetos detallados
     resources: [
-    {
-      name: "stream",
-      types: ["movie"],
-      idPrefixes: ["tt"]
-    },
-    {
-      name: "meta",
-      types: ["movie"],
-      idPrefixes: ["tt"]
-    }
-  ],
-  types: ["movie"],
-  catalogs: []
-  }), { headers: corsHeaders });
+      {
+        name: "stream",
+        types: ["movie", "series"],
+        idPrefixes: ["tt"]
+      },
+      {
+        name: "meta", // Agregado para satisfacer clientes estrictos
+        types: ["movie", "series"],
+        idPrefixes: ["tt"]
+      }
+    ],
+    
+    types: ["movie", "series"],
+    catalogs: [], // Explícito vacío
+    idPrefixes: ["tt"]
+  });
 });
 
-// --- RUTA 2: STREAM ---
+// ==========================================
+// 2. META (Stub/Dummy)
+// ==========================================
+// Aunque no tengamos metadata propia, respondemos lo básico para que Nuvio no falle
+router.get('/meta/:type/:id.json', ({ params }) => {
+  const { type, id } = params;
+  // Solo devolvemos el ID y tipo para confirmar existencia
+  return json({
+    meta: {
+      id: id.replace(".json", ""),
+      type: type,
+      name: id, // Placeholder
+      poster: "", // Evita errores de null
+      background: ""
+    }
+  });
+});
+
+// ==========================================
+// 3. STREAM (La Lógica Principal)
+// ==========================================
 router.get('/stream/:type/:id.json', async (request, env) => {
   let { type, id } = request.params;
-  id = decodeURIComponent(id); // Decodificar por si acaso
+  id = decodeURIComponent(id).replace(".json", ""); // Limpieza extra
 
-  // Verificación de variable de entorno
   if (!env.STREMIO_SERVER_URL) {
-    return new Response(JSON.stringify({ 
-      streams: [{ title: "⚠️ CONFIGURAR STREMIO_SERVER_URL", url: "" }] 
-    }), { headers: corsHeaders });
+    return json({ streams: [{ title: "⚠️ Config Error: STREMIO_SERVER_URL missing", url: "" }] });
   }
 
   const serverUrl = env.STREMIO_SERVER_URL.replace(/\/$/, "");
 
   try {
-    // CONSTRUCCIÓN DE LA URL CON PROXY
-    // La lógica es: Proxy + (URL Encodeada de Torrentio)
-    const torrentioTarget = `${TORRENTIO_BASE}/stream/${type}/${id}.json`;
-    const finalUrl = `${PROXY_URL}${encodeURIComponent(torrentioTarget)}`;
+    const targetUrl = `${TORRENTIO_URL}/stream/${type}/${id}.json`;
+    console.log(`Pidiendo a: ${targetUrl}`);
 
-    console.log(`Intentando fetch a: ${finalUrl}`);
-
-    const response = await fetch(finalUrl, {
-      headers: {
-        // A veces el proxy requiere que parezcamos un navegador
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      }
+    const response = await fetch(targetUrl, {
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
     });
 
-    if (!response.ok) {
-      console.log(`Error del Proxy/Torrentio: ${response.status}`);
-      // Fallback silencioso (retorna vacío)
-      return new Response(JSON.stringify({ streams: [] }), { headers: corsHeaders });
-    }
+    if (!response.ok) return json({ streams: [] });
 
     const data = await response.json();
 
-    if (!data.streams || data.streams.length === 0) {
-      console.log("Torrentio no devolvió resultados.");
-      return new Response(JSON.stringify({ streams: [] }), { headers: corsHeaders });
-    }
+    if (!data.streams || !data.streams.length) return json({ streams: [] });
 
-    // TRANSFORMACIÓN DE DATOS
-    const newStreams = data.streams.map((stream, index) => {
+    const newStreams = data.streams.map(stream => {
+      // Filtros de seguridad
       if (!stream.infoHash) return null;
 
-      const originalTitle = stream.title || stream.name || "Torrent";
-      const cleanTitle = originalTitle.split('\n')[0]; 
-      
-      // Lógica de archivo (File Index)
-      let fileIdx = 0;
-      if (stream.fileIdx !== undefined) {
-        fileIdx = stream.fileIdx;
-      } else if (type === 'series') {
-        // A veces en series Torrentio no manda fileIdx en el objeto principal, 
-        // pero para este experimento asumimos 0 si falla, o podrías implementar lógica extra.
-        fileIdx = 0; 
-      }
-
-      // Tu URL mágica
+      const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
       const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
+      
+      // Limpieza del título para que se vea pro en Nuvio
+      const metaLine = stream.title?.split('\n')[0] || "Stream";
+      const techDetails = stream.title?.split('\n')[1] || "";
 
       return {
-        name: `HTTP-S [${index + 1}]`,
-        title: `${cleanTitle}\n⬇️ ${stream.behaviorHints?.filename || 'Stream'}`,
+        name: "⚡ HTTP Bridge",
+        title: `${metaLine}\n${techDetails}`, // Mantiene info de calidad (4K, HDR)
         url: directUrl,
         behaviorHints: {
           notWebReady: false, 
@@ -113,15 +118,18 @@ router.get('/stream/:type/:id.json', async (request, env) => {
       };
     }).filter(Boolean);
 
-    return new Response(JSON.stringify({ streams: newStreams }), { headers: corsHeaders });
+    return json({ streams: newStreams });
 
   } catch (error) {
-    console.error("Error crítico:", error);
-    return new Response(JSON.stringify({ streams: [] }), { headers: corsHeaders });
+    console.error(error);
+    return json({ streams: [] });
   }
 });
 
-// Manejo de 404
+// Manejo de OPTIONS (Pre-flight CORS)
+router.options('*', () => new Response(null, { headers: corsHeaders }));
+
+// 404
 router.all('*', () => new Response('Not Found', { status: 404, headers: corsHeaders }));
 
 export default {
