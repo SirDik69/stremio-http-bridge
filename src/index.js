@@ -3,11 +3,38 @@ import { Router } from 'itty-router';
 const router = Router();
 
 // ==========================================
-// CONFIGURACIÓN
+// CONFIGURACIÓN DE PROVEEDORES (2026 - Enero)
 // ==========================================
-const MAX_RESULTS = 5; // Tu petición: Limitar resultados para evitar saturación
-const YTS_API_URL = "https://yts.mx/api/v2/list_movies.json";
-const TPB_API_URL = "https://apibay.org/q.php";
+const PROVIDERS = [
+  {
+    name: "TorrentsDB",          // Mejor opción actual: fork de Torrentio + más providers (incluye TPB, Knaben, etc.)
+    url: "https://torrentsdb.com/stream"
+  },
+  {
+    name: "Torrentio Lite",      // Versión ligera, a veces mejor para bypass
+    url: "https://torrentio.strem.fun/lite/stream"
+  },
+  {
+    name: "ThePirateBay+",       // Directo desde TPB+ (último recurso, puede fallar más)
+    url: "https://thepiratebay-plus.strem.fun/stream"
+  }
+];
+
+// User-Agent realista (Chrome 2026) + extras para evitar detección
+const BROWSER_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Referer": "https://www.stremio.com/",
+  "Origin": "https://www.stremio.com",
+  "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  "Sec-Ch-Ua-Mobile": "?0",
+  "Sec-Ch-Ua-Platform": '"Windows"',
+  "Sec-Fetch-Dest": "empty",
+  "Sec-Fetch-Mode": "cors",
+  "Sec-Fetch-Site": "same-origin"
+};
 
 const responseHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -18,71 +45,13 @@ const responseHeaders = {
 
 const json = (data) => new Response(JSON.stringify(data), { headers: responseHeaders });
 
-// ==========================================
-// LÓGICA DE PROVEEDORES DIRECTOS
-// ==========================================
-
-// 1. YTS (Excelente para Películas)
-async function fetchYTS(imdbId) {
-  try {
-    const url = `${YTS_API_URL}?query_term=${imdbId}`;
-    console.log(`Consultando YTS: ${url}`);
-    
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (!data.data || !data.data.movies) return [];
-
-    // Mapeamos los resultados de YTS al formato de Stremio
-    return data.data.movies[0].torrents.map(t => ({
-      name: "⚡ YTS",
-      title: `${data.data.movies[0].title}\n${t.quality} ${t.type} - 📦 ${t.size}`,
-      infoHash: t.hash.toLowerCase(),
-      fileIdx: 0, // YTS siempre son películas (1 archivo principal)
-      seeders: t.seeds
-    }));
-  } catch (e) {
-    console.error("Error YTS:", e);
-    return [];
-  }
-}
-
-// 2. ThePirateBay (Backup para todo)
-async function fetchTPB(imdbId, type) {
-  try {
-    // TPB busca por ID (tt...)
-    const url = `${TPB_API_URL}?q=${imdbId}&cat=${type === 'movie' ? 200 : 205}`;
-    console.log(`Consultando TPB: ${url}`);
-
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (!data || data.length === 0 || data[0].name === "No results returned") return [];
-
-    return data.map(t => ({
-      name: "⚡ TPB",
-      title: `${t.name}\nSeeds: ${t.seeders} - Size: ${(t.size / 1073741824).toFixed(2)} GB`,
-      infoHash: t.info_hash.toLowerCase(),
-      fileIdx: 0, // Asumimos 0, para series es arriesgado pero funcional
-      seeders: parseInt(t.seeders)
-    }));
-  } catch (e) {
-    console.error("Error TPB:", e);
-    return [];
-  }
-}
-
-// ==========================================
-// RUTAS
-// ==========================================
-
 router.get('/manifest.json', () => {
   return json({
-    id: "com.nuvio.direct.source",
-    version: "4.0.0",
-    name: "Direct Source Bridge",
-    description: "Usa APIs de YTS y TPB directamente (Sin bloqueos)",
-    logo: "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/YTS_logo.svg/1200px-YTS_logo.svg.png",
+    id: "com.nuvio.universal.bridge.tpb-torrentsdb",
+    version: "3.1.0",
+    name: "Universal Bridge (TorrentsDB + Torrentio Lite + TPB)",
+    description: "Agrega streams de TorrentsDB, Torrentio Lite y ThePirateBay+ (2026)",
+    logo: "https://dl.strem.io/addon-logo.png",
     resources: [
       { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
       { name: "meta", types: ["movie", "series"], idPrefixes: ["tt"] }
@@ -93,64 +62,94 @@ router.get('/manifest.json', () => {
 });
 
 router.get('/meta/:type/:id.json', ({ params }) => {
-  return json({ meta: { id: params.id.replace(".json", ""), type: params.type, name: "Meta" } });
+  return json({
+    meta: { id: params.id.replace(".json", ""), type: params.type, name: "Metadata Bridge" }
+  });
 });
 
-router.get('/stream/:type/:id.json', async (request, env) => {
+router.get('/stream/:type/:id.json', async (request) => {
   let { type, id } = request.params;
   id = decodeURIComponent(id).replace(".json", "");
 
-  if (!env.STREMIO_SERVER_URL) {
-    return json({ streams: [{ name: "⚠️ ERROR", title: "Configura STREMIO_SERVER_URL", url: "#" }] });
-  }
-  const serverUrl = env.STREMIO_SERVER_URL.replace(/\/$/, "");
+  let validStreams = [];
+  let debugLog = [];
 
-  let streams = [];
+  for (const provider of PROVIDERS) {
+    try {
+      console.log(`Intentando ${provider.name} para ${type}/${id}`);
+      const targetUrl = `${provider.url}/${type}/${id}.json`;
 
-  // ESTRATEGIA:
-  // Si es película -> YTS primero (Mejor calidad/api)
-  // Si falla o es serie -> TPB
+      const response = await fetch(targetUrl, {
+        method: "GET",
+        headers: BROWSER_HEADERS,
+        cache: 'no-store'  // Evita cache Cloudflare que puede dar stale 403
+      });
 
-  if (type === 'movie') {
-    const ytsStreams = await fetchYTS(id);
-    streams = [...streams, ...ytsStreams];
-  }
+      debugLog.push(`${provider.name}: HTTP ${response.status}`);
 
-  // Si no hay suficientes resultados, probamos TPB
-  if (streams.length < MAX_RESULTS) {
-    const tpbStreams = await fetchTPB(id, type);
-    streams = [...streams, ...tpbStreams];
-  }
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Sin texto');
+        debugLog.push(`${provider.name}: Error body → ${errorText.substring(0, 100)}...`);
+        continue;
+      }
 
-  // Si no hay nada
-  if (streams.length === 0) {
-    return json({ 
-      streams: [{ name: "⚠️ SIN DATOS", title: "No se encontraron torrents en YTS/TPB", url: "#" }] 
-    });
-  }
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        debugLog.push(`${provider.name}: No es JSON (posible bloqueo HTML)`);
+        continue;
+      }
 
-  // PROCESAR FINALMENTE (Convertir a HTTPS Link)
-  // 1. Ordenar por Seeders (Mejor salud primero)
-  // 2. Limitar cantidad (Tu petición)
-  const finalStreams = streams
-    .sort((a, b) => b.seeders - a.seeders)
-    .slice(0, MAX_RESULTS) // <--- AQUÍ LIMITAMOS LOS RESULTADOS
-    .map(stream => {
-      const directUrl = `${serverUrl}/${stream.infoHash}/${stream.fileIdx}`;
-      
-      return {
-        name: stream.name,
-        title: stream.title,
-        url: directUrl,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: `src-${stream.infoHash}`, // Agrupación simple
-          filename: "video.mp4"
+      const data = await response.json();
+
+      if (data.streams && Array.isArray(data.streams) && data.streams.length > 0) {
+        validStreams = data.streams
+          .filter(stream => stream.infoHash)  // Solo streams válidos con infoHash
+          .map(stream => {
+            const fileIdx = stream.fileIdx ?? 0;
+            // Aquí pones tu servidor de streams (si usas uno propio para servir el magnet/torrent)
+            // Si no tienes servidor, cambia a magnetURI o http si el addon lo soporta
+            const directUrl = `magnet:?xt=urn:btih:${stream.infoHash}`; // Ejemplo básico
+
+            const titleParts = (stream.title || "Stream").split("\n");
+            const mainTitle = titleParts[0] || "Video";
+            const extra = titleParts[1] || `Seeds: ${stream.seeders ?? '?'}`;
+
+            return {
+              name: `🔥 ${provider.name}`,
+              title: `${mainTitle}\n${extra}`,
+              url: directUrl,
+              behaviorHints: {
+                notWebReady: true,  // Cambia a false si usas servidor http directo
+                bingeGroup: stream.behaviorHints?.bingeGroup,
+                filename: stream.behaviorHints?.filename
+              },
+              sources: stream.sources || []  // Si quieres pasar más info
+            };
+          });
+
+        if (validStreams.length > 0) {
+          debugLog.push(`${provider.name}: ¡Éxito! ${validStreams.length} streams`);
+          break;  // Salimos al encontrar algo bueno
         }
-      };
-    });
+      } else {
+        debugLog.push(`${provider.name}: 0 streams válidos`);
+      }
+    } catch (e) {
+      debugLog.push(`${provider.name}: Excepción → ${e.message}`);
+    }
+  }
 
-  return json({ streams: finalStreams });
+  if (validStreams.length === 0) {
+    return json({
+      streams: [{
+        name: "⚠️ SIN STREAMS",
+        title: `Debug: ${debugLog.join(" | ")}\nPrueba con debrid o VPN`,
+        url: "#"
+      }]
+    });
+  }
+
+  return json({ streams: validStreams });
 });
 
 router.options('*', () => new Response(null, { headers: responseHeaders }));
