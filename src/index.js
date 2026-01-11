@@ -3,24 +3,25 @@ import { Router } from 'itty-router';
 const router = Router();
 
 // ==========================================
-// CONFIGURACIÓN DE PROVEEDORES (2026 - Enero)
+// 1. CONFIGURACIÓN GANADORA (HEADERS + PROVIDERS)
 // ==========================================
+
 const PROVIDERS = [
   {
-    name: "TorrentsDB",          // Mejor opción actual: fork de Torrentio + más providers (incluye TPB, Knaben, etc.)
+    name: "TorrentsDB",          
     url: "https://torrentsdb.com/stream"
   },
   {
-    name: "Torrentio Lite",      // Versión ligera, a veces mejor para bypass
-    url: "https://torrentio.strem.fun/lite/stream"
+    name: "Torrentio Lite",      
+    url: "https://torrentio.strem.fun/stream"
   },
   {
-    name: "ThePirateBay+",       // Directo desde TPB+ (último recurso, puede fallar más)
+    name: "ThePirateBay+",       
     url: "https://thepiratebay-plus.strem.fun/stream"
   }
 ];
 
-// User-Agent realista (Chrome 2026) + extras para evitar detección
+// Headers "Mágicos" que saltan el bloqueo (Chrome 131)
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   "Accept": "application/json, text/plain, */*",
@@ -45,12 +46,16 @@ const responseHeaders = {
 
 const json = (data) => new Response(JSON.stringify(data), { headers: responseHeaders });
 
+// ==========================================
+// 2. RUTAS DEL ADDON
+// ==========================================
+
 router.get('/manifest.json', () => {
   return json({
-    id: "com.nuvio.universal.bridge.tpb-torrentsdb",
-    version: "3.1.0",
-    name: "Universal Bridge (TorrentsDB + Torrentio Lite + TPB)",
-    description: "Agrega streams de TorrentsDB, Torrentio Lite y ThePirateBay+ (2026)",
+    id: "com.nuvio.ultimate.bridge",
+    version: "4.0.0",
+    name: "Ultimate HTTP Bridge",
+    description: "Bypass Cloudflare + HTTP Streamer",
     logo: "https://dl.strem.io/addon-logo.png",
     resources: [
       { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
@@ -67,85 +72,96 @@ router.get('/meta/:type/:id.json', ({ params }) => {
   });
 });
 
-router.get('/stream/:type/:id.json', async (request) => {
+router.get('/stream/:type/:id.json', async (request, env) => {
   let { type, id } = request.params;
   id = decodeURIComponent(id).replace(".json", "");
+
+  // VERIFICACIÓN DEL SERVIDOR PROPIO
+  if (!env.STREMIO_SERVER_URL) {
+    return json({ streams: [{ name: "⚠️ ERROR", title: "Configura STREMIO_SERVER_URL en Cloudflare", url: "#" }] });
+  }
+  const serverUrl = env.STREMIO_SERVER_URL.replace(/\/$/, "");
 
   let validStreams = [];
   let debugLog = [];
 
+  // ==========================================
+  // 3. FETCHING (LÓGICA NUEVA QUE FUNCIONA)
+  // ==========================================
   for (const provider of PROVIDERS) {
     try {
-      console.log(`Intentando ${provider.name} para ${type}/${id}`);
+      console.log(`Intentando ${provider.name}...`);
       const targetUrl = `${provider.url}/${type}/${id}.json`;
 
       const response = await fetch(targetUrl, {
         method: "GET",
-        headers: BROWSER_HEADERS,
-        cache: 'no-store'  // Evita cache Cloudflare que puede dar stale 403
+        headers: BROWSER_HEADERS, // Usamos los headers blindados
+        cf: { cacheTtl: 60 }      // Instrucción a Cloudflare
       });
 
-      debugLog.push(`${provider.name}: HTTP ${response.status}`);
-
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Sin texto');
-        debugLog.push(`${provider.name}: Error body → ${errorText.substring(0, 100)}...`);
+        debugLog.push(`${provider.name}: ${response.status}`);
         continue;
       }
 
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {
-        debugLog.push(`${provider.name}: No es JSON (posible bloqueo HTML)`);
-        continue;
+        continue; // Ignoramos respuestas HTML/Error
       }
 
       const data = await response.json();
 
-      if (data.streams && Array.isArray(data.streams) && data.streams.length > 0) {
+      if (data.streams && data.streams.length > 0) {
+        
+        // ==========================================
+        // 4. TRANSFORMACIÓN (LÓGICA DE TU PROYECTO)
+        // ==========================================
         validStreams = data.streams
-          .filter(stream => stream.infoHash)  // Solo streams válidos con infoHash
+          .filter(stream => stream.infoHash) // Solo torrents válidos
           .map(stream => {
-            const fileIdx = stream.fileIdx ?? 0;
-            // Aquí pones tu servidor de streams (si usas uno propio para servir el magnet/torrent)
-            // Si no tienes servidor, cambia a magnetURI o http si el addon lo soporta
-            const directUrl = `magnet:?xt=urn:btih:${stream.infoHash}`; // Ejemplo básico
+            
+            // A. Recuperamos el índice correcto
+            const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
+            
+            // B. Construimos TU URL PRIVADA (Aquí ocurre la magia)
+            // En lugar de devolver magnet:, devolvemos https://tu-server...
+            const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
 
+            // C. Limpieza estética del título
             const titleParts = (stream.title || "Stream").split("\n");
-            const mainTitle = titleParts[0] || "Video";
-            const extra = titleParts[1] || `Seeds: ${stream.seeders ?? '?'}`;
+            const cleanTitle = titleParts[0];
+            const cleanDetails = titleParts[1] || `S:${stream.seeders || '?'}`;
 
             return {
-              name: `🔥 ${provider.name}`,
-              title: `${mainTitle}\n${extra}`,
-              url: directUrl,
+              name: `⚡ ${provider.name}`,
+              title: `${cleanTitle}\n${cleanDetails}`,
+              url: directUrl, // <--- URL HTTP COMPATIBLE CON NUVIO
               behaviorHints: {
-                notWebReady: true,  // Cambia a false si usas servidor http directo
+                notWebReady: false, // <--- CRUCIAL PARA IOS/NUVIO
                 bingeGroup: stream.behaviorHints?.bingeGroup,
                 filename: stream.behaviorHints?.filename
-              },
-              sources: stream.sources || []  // Si quieres pasar más info
+              }
             };
           });
 
         if (validStreams.length > 0) {
-          debugLog.push(`${provider.name}: ¡Éxito! ${validStreams.length} streams`);
-          break;  // Salimos al encontrar algo bueno
+          console.log(`¡Éxito con ${provider.name}!`);
+          break; // Si funciona, dejamos de buscar
         }
-      } else {
-        debugLog.push(`${provider.name}: 0 streams válidos`);
       }
     } catch (e) {
-      debugLog.push(`${provider.name}: Excepción → ${e.message}`);
+      debugLog.push(`${provider.name}: Error ${e.message}`);
     }
   }
 
+  // Manejo de vacío
   if (validStreams.length === 0) {
-    return json({
-      streams: [{
-        name: "⚠️ SIN STREAMS",
-        title: `Debug: ${debugLog.join(" | ")}\nPrueba con debrid o VPN`,
-        url: "#"
-      }]
+    return json({ 
+      streams: [{ 
+        name: "⚠️ SIN RESULTADOS", 
+        title: `No se pudieron cargar enlaces.\nLog: ${debugLog.join(" | ")}`, 
+        url: "#" 
+      }] 
     });
   }
 
