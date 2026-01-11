@@ -1,6 +1,6 @@
 name = "stremio-http-bridge"
 main = "src/index.js"
-compatibility_date = "2023-12-01"
+compatibility_date = "2025-11-17"
 
 # Aquí definimos las variables. 
 # Recomiendo configurarlas en el Dashboard de Cloudflare o usando 'wrangler secret put',
