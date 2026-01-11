@@ -3,35 +3,19 @@ import { Router } from 'itty-router';
 const router = Router();
 
 // ==========================================
-// 1. CONFIGURACIÓN GANADORA (HEADERS + PROVIDERS)
+// 1. CONFIGURACIÓN DE PROVEEDORES
 // ==========================================
-
 const PROVIDERS = [
-  {
-    name: "TorrentsDB",          
-    url: "https://torrentsdb.com/stream"
-  },
-  {
-    name: "Torrentio Lite",      
-    url: "https://torrentio.strem.fun/stream"
-  },
-  {
-    name: "ThePirateBay+",       
-    url: "https://thepiratebay-plus.strem.fun/stream"
-  }
+  { name: "TorrentsDB", url: "https://torrentsdb.com/stream" },
+  { name: "Torrentio Lite", url: "https://torrentio.strem.fun/lite/stream" },
+  { name: "ThePirateBay+", url: "https://thepiratebay-plus.strem.fun/stream" }
 ];
 
-// Headers "Mágicos" que saltan el bloqueo (Chrome 131)
+// Headers "Chrome 2026" (Blindados)
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   "Accept": "application/json, text/plain, */*",
-  "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
-  "Accept-Encoding": "gzip, deflate, br",
-  "Referer": "https://www.stremio.com/",
-  "Origin": "https://www.stremio.com",
-  "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-  "Sec-Ch-Ua-Mobile": "?0",
-  "Sec-Ch-Ua-Platform": '"Windows"',
+  "Accept-Language": "en-US,en;q=0.9",
   "Sec-Fetch-Dest": "empty",
   "Sec-Fetch-Mode": "cors",
   "Sec-Fetch-Site": "same-origin"
@@ -47,15 +31,35 @@ const responseHeaders = {
 const json = (data) => new Response(JSON.stringify(data), { headers: responseHeaders });
 
 // ==========================================
-// 2. RUTAS DEL ADDON
+// 2. UTILS: FILTRO SANITARIO
+// ==========================================
+function isIntruder(streamTitle, requestType) {
+  if (!streamTitle) return false;
+  const title = streamTitle.toUpperCase();
+  
+  // Si buscamos PELÍCULA, eliminamos resultados de SERIES
+  if (requestType === 'movie') {
+    // Regex para detectar S01E01, Season 1, etc.
+    const seriesPatterns = [/S\d\dE\d\d/, /SEASON \d/, /EPISODE \d/, /COMPLETE SERIES/, /S\d\d/];
+    if (seriesPatterns.some(pattern => pattern.test(title))) return true;
+  }
+
+  // Opcional: Filtro de pornografía básico por si acaso se cuela algo
+  if (title.includes("XXX") || title.includes("PORN")) return true;
+
+  return false;
+}
+
+// ==========================================
+// 3. RUTAS
 // ==========================================
 
 router.get('/manifest.json', () => {
   return json({
     id: "com.nuvio.ultimate.bridge",
-    version: "4.0.0",
+    version: "4.5.0", // Bump version
     name: "Ultimate HTTP Bridge",
-    description: "Bypass Cloudflare + HTTP Streamer",
+    description: "Bypass Cloudflare + Sanitized Streams",
     logo: "https://dl.strem.io/addon-logo.png",
     resources: [
       { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
@@ -68,7 +72,7 @@ router.get('/manifest.json', () => {
 
 router.get('/meta/:type/:id.json', ({ params }) => {
   return json({
-    meta: { id: params.id.replace(".json", ""), type: params.type, name: "Metadata Bridge" }
+    meta: { id: params.id.replace(".json", ""), type: params.type, name: "Meta" }
   });
 });
 
@@ -76,96 +80,80 @@ router.get('/stream/:type/:id.json', async (request, env) => {
   let { type, id } = request.params;
   id = decodeURIComponent(id).replace(".json", "");
 
-  // VERIFICACIÓN DEL SERVIDOR PROPIO
   if (!env.STREMIO_SERVER_URL) {
-    return json({ streams: [{ name: "⚠️ ERROR", title: "Configura STREMIO_SERVER_URL en Cloudflare", url: "#" }] });
+    return json({ streams: [{ name: "⚠️ ERROR", title: "Falta STREMIO_SERVER_URL", url: "#" }] });
   }
   const serverUrl = env.STREMIO_SERVER_URL.replace(/\/$/, "");
 
-  let validStreams = [];
-  let debugLog = [];
+  let allStreams = [];
+  let uniqueHashes = new Set(); // Para evitar duplicados
 
-  // ==========================================
-  // 3. FETCHING (LÓGICA NUEVA QUE FUNCIONA)
-  // ==========================================
+  // BUSCAMOS EN TODOS LOS PROVEEDORES
+  // (Ahora no paramos en el primero, acumulamos para tener mejores opciones)
   for (const provider of PROVIDERS) {
     try {
-      console.log(`Intentando ${provider.name}...`);
-      const targetUrl = `${provider.url}/${type}/${id}.json`;
-
-      const response = await fetch(targetUrl, {
-        method: "GET",
-        headers: BROWSER_HEADERS, // Usamos los headers blindados
-        cf: { cacheTtl: 60 }      // Instrucción a Cloudflare
+      const response = await fetch(`${provider.url}/${type}/${id}.json`, {
+        headers: BROWSER_HEADERS,
+        cf: { cacheTtl: 120 }
       });
 
-      if (!response.ok) {
-        debugLog.push(`${provider.name}: ${response.status}`);
-        continue;
-      }
-
+      if (!response.ok) continue;
+      
       const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        continue; // Ignoramos respuestas HTML/Error
-      }
+      if (!contentType.includes("application/json")) continue;
 
       const data = await response.json();
 
       if (data.streams && data.streams.length > 0) {
-        
-        // ==========================================
-        // 4. TRANSFORMACIÓN (LÓGICA DE TU PROYECTO)
-        // ==========================================
-        validStreams = data.streams
-          .filter(stream => stream.infoHash) // Solo torrents válidos
-          .map(stream => {
-            
-            // A. Recuperamos el índice correcto
-            const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
-            
-            // B. Construimos TU URL PRIVADA (Aquí ocurre la magia)
-            // En lugar de devolver magnet:, devolvemos https://tu-server...
-            const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
+        // PROCESAMOS Y FILTRAMOS CADA STREAM
+        data.streams.forEach(stream => {
+          // 1. Validación básica
+          if (!stream.infoHash) return;
+          
+          // 2. Deduplicación (Si ya tenemos este archivo, lo saltamos)
+          if (uniqueHashes.has(stream.infoHash)) return;
 
-            // C. Limpieza estética del título
-            const titleParts = (stream.title || "Stream").split("\n");
-            const cleanTitle = titleParts[0];
-            const cleanDetails = titleParts[1] || `S:${stream.seeders || '?'}`;
+          // 3. FILTRO SANITARIO (Aquí matamos al Grinch)
+          const fullTitle = stream.title || stream.name || "";
+          if (isIntruder(fullTitle, type)) return; // Si es un intruso, adiós.
 
-            return {
-              name: `⚡ ${provider.name}`,
-              title: `${cleanTitle}\n${cleanDetails}`,
-              url: directUrl, // <--- URL HTTP COMPATIBLE CON NUVIO
-              behaviorHints: {
-                notWebReady: false, // <--- CRUCIAL PARA IOS/NUVIO
-                bingeGroup: stream.behaviorHints?.bingeGroup,
-                filename: stream.behaviorHints?.filename
-              }
-            };
+          // 4. Transformación a HTTP
+          const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
+          const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
+          
+          // Limpieza visual del título
+          const titleParts = fullTitle.split("\n");
+          const cleanTitle = titleParts[0]; 
+          const details = titleParts[1] || `S:${stream.seeders || '?'} • ${provider.name}`;
+
+          uniqueHashes.add(stream.infoHash);
+          
+          allStreams.push({
+            name: `⚡ ${provider.name}`,
+            title: `${cleanTitle}\n${details}`,
+            url: directUrl,
+            behaviorHints: {
+              notWebReady: false, 
+              bingeGroup: stream.behaviorHints?.bingeGroup,
+              filename: stream.behaviorHints?.filename
+            }
           });
-
-        if (validStreams.length > 0) {
-          console.log(`¡Éxito con ${provider.name}!`);
-          break; // Si funciona, dejamos de buscar
-        }
+        });
       }
     } catch (e) {
-      debugLog.push(`${provider.name}: Error ${e.message}`);
+      // Ignoramos errores silenciosamente para seguir buscando
     }
+    
+    // Si ya tenemos suficientes resultados (ej. 15), paramos para no tardar mucho
+    if (allStreams.length >= 15) break; 
   }
 
-  // Manejo de vacío
-  if (validStreams.length === 0) {
-    return json({ 
-      streams: [{ 
-        name: "⚠️ SIN RESULTADOS", 
-        title: `No se pudieron cargar enlaces.\nLog: ${debugLog.join(" | ")}`, 
-        url: "#" 
-      }] 
-    });
+  if (allStreams.length === 0) {
+    return json({ streams: [{ name: "⚠️ VACÍO", title: "No se encontraron resultados válidos", url: "#" }] });
   }
 
-  return json({ streams: validStreams });
+  // Ordenamos por Seeders (si es posible extraerlo) o mantenemos orden de llegada
+  return json({ streams: allStreams });
 });
 
 router.options('*', () => new Response(null, { headers: responseHeaders }));
