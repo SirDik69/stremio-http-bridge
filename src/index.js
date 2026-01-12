@@ -3,7 +3,7 @@ import { Router } from 'itty-router';
 const router = Router();
 
 // ==========================================
-// 1. TUS PROVEEDORES PERSONALIZADOS
+// 1. PROVEEDORES
 // ==========================================
 const PROVIDERS = [
   {
@@ -24,7 +24,6 @@ const PROVIDERS = [
   }
 ];
 
-// Headers
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   "Accept": "application/json, text/plain, */*",
@@ -41,58 +40,84 @@ const responseHeaders = {
 const json = (data) => new Response(JSON.stringify(data), { headers: responseHeaders });
 
 // ==========================================
-// 2. PARSER INTELIGENTE (BEAUTIFIER)
+// 2. SMART PARSER (MOTOR VISUAL)
 // ==========================================
-function parseStreamDetails(rawTitle, rawName, sizeBytes, seeds, providerName) {
-  const text = (rawTitle + " " + rawName).toUpperCase();
+function analyzeStream(stream, providerName) {
+  // Recopilamos TODA la información disponible en un solo texto para analizar
+  const filename = stream.behaviorHints?.filename || "";
+  const title = stream.title || "";
+  const name = stream.name || "";
   
-  // 1. Detectar Resolución
+  // Texto maestro para análisis (Mayúsculas para regex)
+  const fullText = `${title} ${filename} ${name}`.toUpperCase();
+  
+  // --- 1. DETECCIÓN DE CALIDAD ---
   let quality = "HD";
-  if (text.includes("4K") || text.includes("2160P")) quality = "4K [UHD]";
-  else if (text.includes("1080P")) quality = "1080p [FHD]";
+  if (fullText.includes("4K") || fullText.includes("2160P") || fullText.includes("UHD")) quality = "4K [UHD]";
+  else if (fullText.includes("1080P") || fullText.includes("FHD")) quality = "1080p [FHD]";
   
-  // 2. Detectar Fuente/Tecnología
-  let source = "";
-  if (text.includes("BLURAY") || text.includes("BLU-RAY")) source = "💿 BluRay";
-  else if (text.includes("WEB-DL") || text.includes("WEB")) source = "☁️ WEB-DL";
-  else if (text.includes("HDR") || text.includes("DV") || text.includes("DOLBY")) source = "🌈 HDR/DV";
-  else if (text.includes("HDRIP") || text.includes("BRRIP")) source = "💿 Rip";
+  // --- 2. DETECCIÓN DE FUENTE ---
+  let source = "☁️ WEB-DL"; // Default común
+  if (fullText.includes("BLURAY") || fullText.includes("BLU-RAY") || fullText.includes("BD")) source = "💿 BluRay";
+  else if (fullText.includes("DVD")) source = "📀 DVD";
+  else if (fullText.includes("CAM")) source = "📹 CAM";
+  // Si ya estaba WEB-DL o WEB, se queda el default, pero si detectamos HDR lo mejoramos
   
-  // 3. Detectar Audio/Extras
-  let audio = "";
-  if (text.includes("DUAL") || text.includes("MULTI")) audio = "🗣️ Dual/Multi";
+  // --- 3. DETECCIÓN DE EXTRAS (HDR, AUDIO, CODEC) ---
+  const extras = [];
   
-  // 4. Formatear Tamaño
-  let sizeStr = "? GB";
-  if (sizeBytes) {
-    sizeStr = (sizeBytes / 1073741824).toFixed(2) + " GB";
+  // Video
+  if (fullText.includes("HDR") || fullText.includes("10BIT")) extras.push("🌈 HDR");
+  if (fullText.includes("DOLBY VISION") || fullText.includes("DV")) extras.push("👁️ DV");
+  if (fullText.includes("HEVC") || fullText.includes("X265") || fullText.includes("H.265")) extras.push("⚙️ x265");
+  if (fullText.includes("AV1")) extras.push("⚙️ AV1");
+  
+  // Audio
+  if (fullText.includes("DUAL") || fullText.includes("MULTI") || fullText.includes("LATINO")) extras.push("🗣️ Dual/Multi");
+  else if (fullText.includes("5.1") || fullText.includes("7.1") || fullText.includes("ATMOS")) extras.push("🔊 Surround");
+
+  // --- 4. TAMAÑO ---
+  let sizeStr = "";
+  if (stream.behaviorHints?.videoSize) {
+    sizeStr = (stream.behaviorHints.videoSize / 1073741824).toFixed(2) + " GB";
   } else {
-    // Intentar rescatar del texto si no viene numérico
-    const match = text.match(/(\d+(\.\d+)?)\s?GB/);
+    // Intentar regex
+    const match = fullText.match(/(\d+(\.\d+)?)\s?GB/);
     if (match) sizeStr = match[0];
   }
 
-  // 5. Formatear Seeds
-  const seedsStr = seeds ? `🌱 ${seeds}` : "";
-
-  // 6. Limpiar Filename (El texto largo)
-  // Quitamos basura común para dejar el nombre del archivo más limpio
-  let filename = rawTitle
+  // --- 5. LIMPIEZA DEL NOMBRE DEL ARCHIVO ---
+  // Usamos el filename real si existe, si no el title.
+  let cleanName = filename || title;
+  cleanName = cleanName
     .replace(/\[TORRENT\]/gi, "")
+    .replace(/\[ok\]/gi, "")
     .replace(/MediaFusion/gi, "")
     .replace(/Comet/gi, "")
     .replace(/unknown/gi, "")
+    .replace(/2160p/gi, "") // Quitamos info técnica redundante del nombre
+    .replace(/1080p/gi, "")
+    .replace(/WEB-DL/gi, "")
+    .replace(/\./g, " ") // Puntos por espacios para leer mejor
     .trim();
 
-  // CONSTRUCCIÓN VISUAL (Como tu captura)
-  // Línea 1: Detalles técnicos con iconos
-  const line1 = [`📦 ${sizeStr}`, seedsStr, source].filter(Boolean).join("  ");
-  // Línea 2: Audio y Provider
-  const line2 = [audio, `🏷️ ${providerName}`].filter(Boolean).join("  ");
+  // Si el nombre quedó muy corto o vacío, ponemos algo genérico
+  if (cleanName.length < 3) cleanName = "Video File";
+
+  // --- 6. CONSTRUCCIÓN DE LA TARJETA ---
   
+  // Línea 1: Iconos Técnicos
+  const line1Parts = [sizeStr ? `📦 ${sizeStr}` : null, source, ...extras].filter(Boolean);
+  // Limitamos a 4 items en línea 1 para que no se desborde
+  const line1 = line1Parts.slice(0, 4).join("  ");
+
+  // Línea 2: Provider y Seeds
+  const seeds = stream.seeders !== undefined ? `🌱 ${stream.seeders}` : "";
+  const line2 = [`🏷️ ${providerName}`, seeds].filter(Boolean).join("   ");
+
   return {
-    shortName: `⚡ ${quality}`, // Esto saldrá en negrita arriba (ej: ⚡ 1080p [FHD])
-    description: `${line1}\n${line2}\n📄 ${filename}` // Esto es el cuerpo
+    badge: `⚡ ${quality}`,
+    description: `${line1}\n${line2}\n📄 ${cleanName}`
   };
 }
 
@@ -112,10 +137,10 @@ function isIntruder(streamTitle, requestType) {
 // ==========================================
 router.get('/manifest.json', () => {
   return json({
-    id: "com.nuvio.visual.bridge",
-    version: "7.0.0",
-    name: "Ultimate Bridge (Visual Pro)",
-    description: "Cloudflare Bypass + High Quality UI",
+    id: "com.nuvio.visual.ultimate",
+    version: "8.0.0",
+    name: "Ultimate Bridge (Deep Scan)",
+    description: "Deep metadata inspection for Comet & MediaFusion",
     logo: "https://dl.strem.io/addon-logo.png",
     resources: [
       { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
@@ -162,26 +187,22 @@ router.get('/stream/:type/:id.json', async (request, env) => {
     if (!stream.infoHash) return;
     if (uniqueHashes.has(stream.infoHash)) return;
 
-    // 1. Filtro
-    const rawTitle = stream.title || stream.name || stream.behaviorHints?.filename || "";
-    if (isIntruder(rawTitle, type)) return;
+    // Filtro Intrusos
+    const checkTitle = stream.title || stream.behaviorHints?.filename || "";
+    if (isIntruder(checkTitle, type)) return;
 
-    // 2. URL
+    // Construcción URL
     const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
     const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
     
-    // 3. EMBELLECIMIENTO (VISUAL PRO)
-    const rawName = stream.name || "";
-    // Priorizamos el tamaño que viene en behaviorHints, si no, null
-    const sizeBytes = stream.behaviorHints?.videoSize || null;
-    
-    const visual = parseStreamDetails(rawTitle, rawName, sizeBytes, stream.seeders, stream.providerName);
+    // ANÁLISIS VISUAL PROFUNDO
+    const visual = analyzeStream(stream, stream.providerName);
 
     uniqueHashes.add(stream.infoHash);
 
     allStreams.push({
-      name: visual.shortName, // Ej: ⚡ 1080p [FHD]
-      title: visual.description, // Bloque de detalles con iconos
+      name: visual.badge, // Ej: ⚡ 4K [UHD]
+      title: visual.description, // Descripción rica generada por nosotros
       url: directUrl,
       behaviorHints: {
         notWebReady: false,
@@ -195,11 +216,18 @@ router.get('/stream/:type/:id.json', async (request, env) => {
     return json({ streams: [{ name: "⚠️ VACÍO", title: "Sin resultados", url: "#" }] });
   }
 
-  // Ordenar por calidad (4K primero)
+  // Ordenar por Calidad (4K > 1080p) y luego por Peso
   allStreams.sort((a, b) => {
-    const is4kewA = a.name.includes("4K");
-    const is4kewB = b.name.includes("4K");
-    return is4kewB - is4kewA;
+    // 1. Calidad
+    const is4kA = a.name.includes("4K");
+    const is4kB = b.name.includes("4K");
+    if (is4kA !== is4kB) return is4kB - is4kA; // 4K primero
+    
+    // 2. Si es la misma calidad, intentar ordenar por peso (buscando GB en la descripción)
+    // Esto es un hack visual simple
+    const sizeA = parseFloat((a.title.match(/(\d+\.?\d*) GB/) || ['0'])[1]);
+    const sizeB = parseFloat((b.title.match(/(\d+\.?\d*) GB/) || ['0'])[1]);
+    return sizeB - sizeA; // Mayor peso primero
   });
 
   return json({ streams: allStreams });
