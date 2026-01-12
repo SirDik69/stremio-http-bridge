@@ -16,7 +16,7 @@ const PROVIDERS = [
   },
   {
     name: "MediaFusion", // Instancia pública robusta
-    url: "https://mediafusion.elfhosted.com/stream"
+    url: "https://mediafusionfortheweebs.midnightignite.me/stream"
   },
   {
     name: "TPB+",
