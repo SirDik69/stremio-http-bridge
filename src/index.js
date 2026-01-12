@@ -6,8 +6,8 @@ const router = Router();
 // 1. CONFIGURACIÓN DE PROVEEDORES
 // ==========================================
 const PROVIDERS = [
-  { name: "TorrentsDB", url: "https://torrentsdb.com/stream" },
-  { name: "MediaFusion", url: "https://mediafusionfortheweebs.midnightignite.me/stream" },
+  { name: "TorrentsDB", url: "url/stream" },
+  { name: "MediaFusion", url: "url/stream" },
   { name: "ThePirateBay+", url: "https://thepiratebay-plus.strem.fun/stream" }
 ];
 
