@@ -7,7 +7,7 @@ const router = Router();
 // ==========================================
 const PROVIDERS = [
   { name: "TorrentsDB", url: "https://torrentsdb.com/stream" },
-  { name: "Comet", url: "https://cometfortheweebs.midnightignite.me/eyJtYXhSZXN1bHRzUGVyUmVzb2x1dGlvbiI6MywibWF4U2l6ZSI6MCwiY2FjaGVkT25seSI6ZmFsc2UsInNvcnRDYWNoZWRVbmNhY2hlZFRvZ2V0aGVyIjpmYWxzZSwicmVtb3ZlVHJhc2giOnRydWUsInJlc3VsdEZvcm1hdCI6WyJhbGwiXSwiZGVicmlkU2VydmljZSI6InRvcnJlbnQiLCJkZWJyaWRBcGlLZXkiOiIiLCJkZWJyaWRTdHJlYW1Qcm94eVBhc3N3b3JkIjoiIiwibGFuZ3VhZ2VzIjp7ImV4Y2x1ZGUiOltdLCJwcmVmZXJyZWQiOltdfSwicmVzb2x1dGlvbnMiOnsicjcyMHAiOmZhbHNlLCJyNDgwcCI6ZmFsc2UsInIzNjBwIjpmYWxzZSwidW5rbm93biI6ZmFsc2V9LCJvcHRpb25zIjp7InJlbW92ZV9yYW5rc191bmRlciI6LTEwMDAwMDAwMDAwLCJhbGxvd19lbmdsaXNoX2luX2xhbmd1YWdlcyI6ZmFsc2UsInJlbW92ZV91bmtub3duX2xhbmd1YWdlcyI6ZmFsc2V9fQ==/stream" },
+  { name: "Torrentio", url: "https://torrentio.strem.fun/stream" },
   { name: "ThePirateBay+", url: "https://thepiratebay-plus.strem.fun/stream" }
 ];
 
@@ -145,7 +145,7 @@ router.get('/stream/:type/:id.json', async (request, env) => {
     }
     
     // Si ya tenemos suficientes resultados (ej. 15), paramos para no tardar mucho
-    if (allStreams.length >= 15) break; 
+    if (allStreams.length >= 20) break; 
   }
 
   if (allStreams.length === 0) {
