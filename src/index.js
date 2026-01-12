@@ -19,8 +19,8 @@ const PROVIDERS = [
     url: "https://mediafusionfortheweebs.midnightignite.me/stream"
   },
   {
-    name: "TPB+",
-    url: "https://thepiratebay-plus.strem.fun/stream"
+    name: "AIOStreams",
+    url: "https://aiostreamsfortheweebs.midnightignite.me/stremio/0479360b-f14a-4dff-b7b5-32d70809a4e7/eyJpdiI6IlR0RU1ubWU5NjNJSnFpOVhHVUpzdlE9PSIsImVuY3J5cHRlZCI6IlcwdGd6aEFZNFl1amJzVmhZVFdJRnc9PSIsInR5cGUiOiJhaW9FbmNyeXB0In0/stream"
   }
 ];
 
