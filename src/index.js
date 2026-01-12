@@ -3,12 +3,25 @@ import { Router } from 'itty-router';
 const router = Router();
 
 // ==========================================
-// 1. CONFIGURACIÓN DE PROVEEDORES
+// 1. LISTA DE PROVEEDORES (Actualizada con tus URLs funcionales)
 // ==========================================
 const PROVIDERS = [
-  { name: "TorrentsDB", url: "url/stream" },
-  { name: "MediaFusion", url: "url/stream" },
-  { name: "ThePirateBay+", url: "https://thepiratebay-plus.strem.fun/stream" }
+  {
+    name: "TorrentsDB",
+    url: "https://torrentsdb.com/stream"
+  },
+  {
+    name: "Comet", // Usamos el dominio .ru que te funcionó
+    url: "https://comet.stremio.ru/stream"
+  },
+  {
+    name: "MediaFusion", // Instancia pública robusta
+    url: "https://mediafusion.elfhosted.com/stream"
+  },
+  {
+    name: "TPB+",
+    url: "https://thepiratebay-plus.strem.fun/stream"
+  }
 ];
 
 // Headers "Chrome 2026" (Blindados)
@@ -16,9 +29,8 @@ const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   "Accept": "application/json, text/plain, */*",
   "Accept-Language": "en-US,en;q=0.9",
-  "Sec-Fetch-Dest": "empty",
-  "Sec-Fetch-Mode": "cors",
-  "Sec-Fetch-Site": "same-origin"
+  "Cache-Control": "no-cache",
+  "Pragma": "no-cache"
 };
 
 const responseHeaders = {
@@ -31,22 +43,15 @@ const responseHeaders = {
 const json = (data) => new Response(JSON.stringify(data), { headers: responseHeaders });
 
 // ==========================================
-// 2. UTILS: FILTRO SANITARIO
+// 2. UTILS: SANITIZER
 // ==========================================
 function isIntruder(streamTitle, requestType) {
   if (!streamTitle) return false;
   const title = streamTitle.toUpperCase();
-  
-  // Si buscamos PELÍCULA, eliminamos resultados de SERIES
   if (requestType === 'movie') {
-    // Regex para detectar S01E01, Season 1, etc.
     const seriesPatterns = [/S\d\dE\d\d/, /SEASON \d/, /EPISODE \d/, /COMPLETE SERIES/, /S\d\d/];
     if (seriesPatterns.some(pattern => pattern.test(title))) return true;
   }
-
-  // Opcional: Filtro de pornografía básico por si acaso se cuela algo
-  if (title.includes("XXX") || title.includes("PORN")) return true;
-
   return false;
 }
 
@@ -56,10 +61,10 @@ function isIntruder(streamTitle, requestType) {
 
 router.get('/manifest.json', () => {
   return json({
-    id: "com.nuvio.ultimate.bridge",
-    version: "4.5.0", // Bump version
-    name: "Ultimate HTTP Bridge",
-    description: "Bypass Cloudflare + Sanitized Streams",
+    id: "com.nuvio.parallel.bridge",
+    version: "5.0.0",
+    name: "Ultimate HTTP Bridge (Parallel)",
+    description: "Multi-provider + Parallel Fetching + Sanitizer",
     logo: "https://dl.strem.io/addon-logo.png",
     resources: [
       { name: "stream", types: ["movie", "series"], idPrefixes: ["tt"] },
@@ -71,9 +76,7 @@ router.get('/manifest.json', () => {
 });
 
 router.get('/meta/:type/:id.json', ({ params }) => {
-  return json({
-    meta: { id: params.id.replace(".json", ""), type: params.type, name: "Meta" }
-  });
+  return json({ meta: { id: params.id.replace(".json", ""), type: params.type, name: "Meta" } });
 });
 
 router.get('/stream/:type/:id.json', async (request, env) => {
@@ -86,73 +89,79 @@ router.get('/stream/:type/:id.json', async (request, env) => {
   const serverUrl = env.STREMIO_SERVER_URL.replace(/\/$/, "");
 
   let allStreams = [];
-  let uniqueHashes = new Set(); // Para evitar duplicados
+  let uniqueHashes = new Set();
 
-  // BUSCAMOS EN TODOS LOS PROVEEDORES
-  // (Ahora no paramos en el primero, acumulamos para tener mejores opciones)
-  for (const provider of PROVIDERS) {
+  // ============================================================
+  // EJECUCIÓN PARALELA (La clave para que salgan todos)
+  // ============================================================
+  
+  // 1. Creamos las promesas de todos los proveedores a la vez
+  const fetchPromises = PROVIDERS.map(async (provider) => {
     try {
       const response = await fetch(`${provider.url}/${type}/${id}.json`, {
         headers: BROWSER_HEADERS,
-        cf: { cacheTtl: 120 }
+        cf: { cacheTtl: 60 }
       });
 
-      if (!response.ok) continue;
+      if (!response.ok) return []; // Si falla, devolvemos array vacío
+
+      // Intentamos parsear JSON directamente sin verificar headers estrictos
+      // (Esto arregla el problema de MediaFusion a veces enviando text/plain)
+      const data = await response.json().catch(() => null);
+
+      if (!data || !data.streams) return [];
+
+      // Marcamos el origen para saber quién trajo qué
+      return data.streams.map(s => ({ ...s, providerName: provider.name }));
       
-      const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) continue;
-
-      const data = await response.json();
-
-      if (data.streams && data.streams.length > 0) {
-        // PROCESAMOS Y FILTRAMOS CADA STREAM
-        data.streams.forEach(stream => {
-          // 1. Validación básica
-          if (!stream.infoHash) return;
-          
-          // 2. Deduplicación (Si ya tenemos este archivo, lo saltamos)
-          if (uniqueHashes.has(stream.infoHash)) return;
-
-          // 3. FILTRO SANITARIO (Aquí matamos al Grinch)
-          const fullTitle = stream.title || stream.name || "";
-          if (isIntruder(fullTitle, type)) return; // Si es un intruso, adiós.
-
-          // 4. Transformación a HTTP
-          const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
-          const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
-          
-          // Limpieza visual del título
-          const titleParts = fullTitle.split("\n");
-          const cleanTitle = titleParts[0]; 
-          const details = titleParts[1] || `S:${stream.seeders || '?'} • ${provider.name}`;
-
-          uniqueHashes.add(stream.infoHash);
-          
-          allStreams.push({
-            name: `⚡ ${provider.name}`,
-            title: `${cleanTitle}\n${details}`,
-            url: directUrl,
-            behaviorHints: {
-              notWebReady: false, 
-              bingeGroup: stream.behaviorHints?.bingeGroup,
-              filename: stream.behaviorHints?.filename
-            }
-          });
-        });
-      }
     } catch (e) {
-      // Ignoramos errores silenciosamente para seguir buscando
+      return []; // Ignoramos errores de red individuales
     }
+  });
+
+  // 2. Esperamos a que TODOS terminen (Promise.all)
+  const results = await Promise.all(fetchPromises);
+
+  // 3. Aplanamos y procesamos los resultados
+  results.flat().forEach(stream => {
+    // A. Validaciones
+    if (!stream.infoHash) return;
+    if (uniqueHashes.has(stream.infoHash)) return;
     
-    // Si ya tenemos suficientes resultados (ej. 15), paramos para no tardar mucho
-    if (allStreams.length >= 20) break; 
-  }
+    // B. Filtro Sanitario (Anti-Grinch)
+    const fullTitle = stream.title || stream.name || "";
+    if (isIntruder(fullTitle, type)) return;
+
+    // C. Transformación a HTTP (Tu lógica)
+    const fileIdx = stream.fileIdx !== undefined ? stream.fileIdx : 0;
+    const directUrl = `${serverUrl}/${stream.infoHash}/${fileIdx}`;
+    
+    // D. Formateo Visual
+    const titleParts = fullTitle.split("\n");
+    const cleanTitle = titleParts[0];
+    const details = titleParts[1] || `S:${stream.seeders || '?'} • ${stream.providerName}`;
+
+    uniqueHashes.add(stream.infoHash);
+
+    allStreams.push({
+      name: `⚡ ${stream.providerName}`, // Mostramos el nombre del proveedor real
+      title: `${cleanTitle}\n${details}`,
+      url: directUrl,
+      behaviorHints: {
+        notWebReady: false,
+        bingeGroup: stream.behaviorHints?.bingeGroup,
+        filename: stream.behaviorHints?.filename
+      }
+    });
+  });
 
   if (allStreams.length === 0) {
-    return json({ streams: [{ name: "⚠️ VACÍO", title: "No se encontraron resultados válidos", url: "#" }] });
+    return json({ streams: [{ name: "⚠️ VACÍO", title: "Ningún proveedor encontró enlaces válidos", url: "#" }] });
   }
 
-  // Ordenamos por Seeders (si es posible extraerlo) o mantenemos orden de llegada
+  // Opcional: Ordenar por nombre de proveedor para agruparlos visualmente
+  allStreams.sort((a, b) => a.name.localeCompare(b.name));
+
   return json({ streams: allStreams });
 });
 
