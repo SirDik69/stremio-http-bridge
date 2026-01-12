@@ -8,15 +8,15 @@ const router = Router();
 const PROVIDERS = [
   {
     name: "TorrentsDB",
-    url: "https://torrentsdb.com/stream"
+    url: "stremio://torrentsdb.com/eyJxdWFsaXR5ZmlsdGVyIjpbIjcyMHAiLCI0ODBwIiwib3RoZXIiLCJzY3IiLCJjYW0iLCJ1bmtub3duIl0sImxpbWl0IjoiMTAifQ==/stream"
   },
   {
     name: "Comet", 
-    url: "https://comet.stremio.ru/stream"
+    url: "https://comet.stremio.ru/eyJtYXhSZXN1bHRzUGVyUmVzb2x1dGlvbiI6MTAsIm1heFNpemUiOjAsImNhY2hlZE9ubHkiOmZhbHNlLCJzb3J0Q2FjaGVkVW5jYWNoZWRUb2dldGhlciI6ZmFsc2UsInJlbW92ZVRyYXNoIjp0cnVlLCJyZXN1bHRGb3JtYXQiOlsidGl0bGUiLCJ2aWRlb19pbmZvIiwicXVhbGl0eV9pbmZvIiwicmVsZWFzZV9ncm91cCIsInNlZWRlcnMiLCJzaXplIiwidHJhY2tlciIsImxhbmd1YWdlcyJdLCJkZWJyaWRTZXJ2aWNlIjoidG9ycmVudCIsImRlYnJpZEFwaUtleSI6IiIsImRlYnJpZFN0cmVhbVByb3h5UGFzc3dvcmQiOiIiLCJsYW5ndWFnZXMiOnsiZXhjbHVkZSI6W10sInByZWZlcnJlZCI6W119LCJyZXNvbHV0aW9ucyI6eyJyNzIwcCI6ZmFsc2UsInI0ODBwIjpmYWxzZSwicjM2MHAiOmZhbHNlLCJ1bmtub3duIjpmYWxzZX0sIm9wdGlvbnMiOnsicmVtb3ZlX3JhbmtzX3VuZGVyIjotMTAwMDAwMDAwMDAsImFsbG93X2VuZ2xpc2hfaW5fbGFuZ3VhZ2VzIjpmYWxzZSwicmVtb3ZlX3Vua25vd25fbGFuZ3VhZ2VzIjpmYWxzZX19/stream"
   },
   {
     name: "MediaFusion", 
-    url: "https://mediafusionfortheweebs.midnightignite.me/stream"
+    url: "https://mediafusionfortheweebs.midnightignite.me/D-bnynm9kKEjRv75F-la-LIHO9o6ibRtdI0u_D0Y9mhwIPJxqbp_OAH30QqxsFoIQ_qF-_g47cflaiSLgV894b9P4M0t248YyqcXaBFMgJKZ2puo66JJQzdajIbA6KsAL8cb9AkqtS-eNTTTYbdV_Ql-7Lxf1gHkzPPv7CjXLg7sVe3lrv_JlL2-pMr4Wn63GzXfDjuAhWwBSVtiBe1NN2bmcMBBOkE5evSKxAyBz8AylLOmstkcXfwVhoKPSpEuQJ/stream"
   },
   {
     name: "AIOStreams",
