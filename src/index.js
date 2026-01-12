@@ -7,7 +7,7 @@ const router = Router();
 // ==========================================
 const PROVIDERS = [
   { name: "TorrentsDB", url: "https://torrentsdb.com/stream" },
-  { name: "Torrentio", url: "https://torrentio.strem.fun/stream" },
+  { name: "MediaFusion", url: "https://mediafusion.elfhosted.com/stream" },
   { name: "ThePirateBay+", url: "https://thepiratebay-plus.strem.fun/stream" }
 ];
 
